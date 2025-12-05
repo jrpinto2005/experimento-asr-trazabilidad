@@ -4,12 +4,26 @@
 
 ### 1️⃣ Base de Datos (PRIMERO)
 ```bash
-# Crear RDS PostgreSQL en AWS
-# Endpoint: inventario-db.xxxxx.us-east-1.rds.amazonaws.com
-# Ejecutar scripts SQL en orden:
-psql -h <ENDPOINT> -U postgres -d inventario
-\i database/01_create_tables.sql
-\i database/02_seed_data.sql
+# Crear EC2 Instance: database-postgresql
+# Puerto: 5432
+
+# En el servidor:
+sudo apt install postgresql postgresql-contrib -y
+sudo nano /etc/postgresql/14/main/postgresql.conf  # listen_addresses = '*'
+sudo nano /etc/postgresql/14/main/pg_hba.conf      # host all all 0.0.0.0/0 md5
+sudo systemctl restart postgresql
+
+# Crear BD y usuario
+sudo -i -u postgres psql
+CREATE DATABASE inventario;
+CREATE USER admin WITH PASSWORD 'TuPasswordSeguro123!';
+GRANT ALL PRIVILEGES ON DATABASE inventario TO admin;
+\q
+
+# Copiar y ejecutar scripts SQL
+scp database/*.sql ubuntu@<IP_DATABASE>:~/
+psql -h localhost -U admin -d inventario -f ~/01_create_tables.sql
+psql -h localhost -U admin -d inventario -f ~/02_seed_data.sql
 ```
 
 ### 2️⃣ Backend CON Validación
@@ -90,7 +104,7 @@ curl -X GET "http://<IP_BACKEND2>:8080/productos" \
 
 ```bash
 # Conectar a la BD
-psql -h <ENDPOINT> -U postgres -d inventario
+psql -h <IP_DATABASE> -U admin -d inventario
 
 # Ver logs
 SELECT * FROM logs_acceso ORDER BY timestamp DESC LIMIT 20;
@@ -106,7 +120,7 @@ GROUP BY operario_nombre;
 - Frontend: `http://<IP_FRONTEND>`
 - Backend 1 (CON validación): `http://<IP_BACKEND1>:8080`
 - Backend 2 (SIN validación): `http://<IP_BACKEND2>:8080`
-- Base de Datos: `<ENDPOINT_RDS>:5432`
+- Base de Datos: `<IP_DATABASE>:5432`
 
 ## 🎯 Objetivo del Experimento
 
@@ -139,10 +153,9 @@ chmod +x test-backend-sin-validacion.sh
 
 ```bash
 # Cuando termines el experimento:
-# 1. Terminar instancias EC2 (3 instancias)
-# 2. Eliminar instancia RDS
-# 3. Eliminar Security Groups
-# 4. Eliminar Key Pairs (si no los necesitas)
+# 1. Terminar instancias EC2 (4 instancias: Frontend, Backend 1, Backend 2, Database)
+# 2. Eliminar Security Groups
+# 3. Eliminar Key Pairs (si no los necesitas)
 ```
 
 ## 📞 Troubleshooting Rápido

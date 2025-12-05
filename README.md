@@ -22,65 +22,98 @@ Este proyecto implementa un experimento para validar el ASR:
 
 ---
 
-## PARTE 1: Configuración de la Base de Datos PostgreSQL en AWS RDS
+## PARTE 1: Configuración de la Base de Datos PostgreSQL en EC2
 
-### 1.1 Crear la instancia RDS
+### 1.1 Crear instancia EC2 para la Base de Datos
 
-1. Accede a la consola de AWS y ve a **RDS**
-2. Click en **"Create database"**
-3. Configuración:
-   - **Engine**: PostgreSQL
-   - **Template**: Free tier (o el que prefieras)
-   - **DB instance identifier**: `inventario-db`
-   - **Master username**: `postgres`
-   - **Master password**: `<TU_PASSWORD>` (guárdala)
-   - **DB instance class**: db.t3.micro (o superior)
-   - **Storage**: 20 GB
-   - **VPC**: Default VPC
-   - **Public access**: **Yes** (para poder conectar desde EC2 y tu máquina)
-   - **VPC security group**: Create new (llamado `inventario-sg`)
-   - **Database name**: `inventario`
+1. Ve a **EC2 > Launch Instance**
+2. Configuración:
+   - **Name**: `database-postgresql`
+   - **AMI**: Ubuntu Server 22.04 LTS
+   - **Instance type**: t2.micro (suficiente para este experimento)
+   - **Key pair**: Crea o selecciona un key pair existente
+   - **Security group**: 
+     - Crea nuevo: `database-sg`
+     - Allow SSH (22) desde tu IP
+     - Allow PostgreSQL (5432) desde 0.0.0.0/0 (o solo desde las IPs de los backends para mayor seguridad)
+3. **Launch instance**
 
-4. Click en **"Create database"**
-5. Espera 5-10 minutos hasta que el status sea "Available"
-
-### 1.2 Configurar Security Group
-
-1. Ve a **EC2 > Security Groups**
-2. Selecciona el security group `inventario-sg`
-3. Click en **"Edit inbound rules"**
-4. Agrega regla:
-   - **Type**: PostgreSQL
-   - **Port**: 5432
-   - **Source**: 0.0.0.0/0 (o solo las IPs de tus EC2 para mayor seguridad)
-5. Guarda los cambios
-
-### 1.3 Obtener el endpoint de la BD
-
-1. En RDS, click en tu instancia `inventario-db`
-2. Copia el **Endpoint** (ejemplo: `inventario-db.xxxxx.us-east-1.rds.amazonaws.com`)
-3. Guarda este endpoint, lo usarás más adelante
-
-### 1.4 Inicializar la Base de Datos
-
-Desde tu máquina local o una instancia EC2:
+### 1.2 Conectar e Instalar PostgreSQL
 
 ```bash
-# Instalar cliente PostgreSQL (si no lo tienes)
-# macOS:
-brew install postgresql
+# Conectar vía SSH
+ssh -i "tu-key.pem" ubuntu@<IP_PUBLICA_DATABASE>
 
-# Conectar a la BD
-psql -h <TU_ENDPOINT_RDS> -U postgres -d inventario
+# Actualizar sistema
+sudo apt update && sudo apt upgrade -y
 
-# Ejecutar los scripts SQL en orden:
-# 1. Crear tablas
-\i database/01_create_tables.sql
+# Instalar PostgreSQL
+sudo apt install postgresql postgresql-contrib -y
 
-# 2. Insertar datos de ejemplo
-\i database/02_seed_data.sql
+# Verificar instalación
+sudo systemctl status postgresql
+```
 
-# O copiar y pegar el contenido de cada archivo
+### 1.3 Configurar PostgreSQL para Aceptar Conexiones Remotas
+
+```bash
+# Editar postgresql.conf
+sudo nano /etc/postgresql/14/main/postgresql.conf
+
+# Buscar la línea #listen_addresses = 'localhost' y cambiarla a:
+listen_addresses = '*'
+
+# Editar pg_hba.conf para permitir conexiones remotas
+sudo nano /etc/postgresql/14/main/pg_hba.conf
+
+# Agregar al final del archivo:
+host    all             all             0.0.0.0/0               md5
+
+# Reiniciar PostgreSQL
+sudo systemctl restart postgresql
+```
+
+### 1.4 Crear la Base de Datos y Usuario
+
+```bash
+# Cambiar al usuario postgres
+sudo -i -u postgres
+
+# Entrar a psql
+psql
+
+# Dentro de psql, ejecutar:
+CREATE DATABASE inventario;
+CREATE USER admin WITH PASSWORD 'TuPasswordSeguro123!';
+GRANT ALL PRIVILEGES ON DATABASE inventario TO admin;
+\q
+
+# Salir del usuario postgres
+exit
+```
+
+### 1.5 Inicializar la Base de Datos
+
+```bash
+# Copiar los scripts SQL al servidor (desde tu máquina local)
+scp -i "tu-key.pem" database/*.sql ubuntu@<IP_PUBLICA_DATABASE>:~/
+
+# En el servidor de la BD, ejecutar los scripts
+psql -h localhost -U admin -d inventario -f ~/01_create_tables.sql
+psql -h localhost -U admin -d inventario -f ~/02_seed_data.sql
+
+# Verificar que los datos se cargaron
+psql -h localhost -U admin -d inventario -c "SELECT COUNT(*) FROM productos;"
+psql -h localhost -U admin -d inventario -c "SELECT COUNT(*) FROM operarios;"
+```
+
+### 1.6 Obtener la IP de la Base de Datos
+
+```bash
+# La IP pública de tu instancia EC2 de base de datos será:
+# <IP_PUBLICA_DATABASE>
+
+# Esta IP la usarás en los archivos .env de los backends como DB_HOST
 ```
 
 ---
@@ -152,10 +185,10 @@ cd ~/backend-con-validacion
 
 # Crear archivo .env
 cat > .env << EOF
-DB_HOST=<TU_ENDPOINT_RDS>
+DB_HOST=<IP_PUBLICA_DATABASE>
 DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=<TU_PASSWORD>
+DB_USER=admin
+DB_PASSWORD=TuPasswordSeguro123!
 DB_NAME=inventario
 PORT=8080
 EOF
@@ -255,10 +288,10 @@ cd ~/backend-sin-validacion
 
 # Crear .env
 cat > .env << EOF
-DB_HOST=<TU_ENDPOINT_RDS>
+DB_HOST=<IP_PUBLICA_DATABASE>
 DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=<TU_PASSWORD>
+DB_USER=admin
+DB_PASSWORD=TuPasswordSeguro123!
 DB_NAME=inventario
 PORT=8080
 EOF
@@ -460,7 +493,7 @@ sudo journalctl -u backend-sin-validacion -f
 | Frontend | `http://<IP_FRONTEND>` |
 | Backend CON Validación | `http://<IP_BACKEND1>:8080` |
 | Backend SIN Validación | `http://<IP_BACKEND2>:8080` |
-| Base de Datos | `<ENDPOINT_RDS>:5432` |
+| Base de Datos | `<IP_PUBLICA_DATABASE>:5432` |
 
 ---
 
@@ -468,9 +501,9 @@ sudo journalctl -u backend-sin-validacion -f
 
 Para evitar cargos innecesarios, cuando termines el experimento:
 
-1. Termina las 3 instancias EC2
-2. Elimina la instancia RDS
-3. Elimina los Security Groups creados
+1. Termina las 4 instancias EC2 (Frontend, Backend 1, Backend 2, Database)
+2. Elimina los Security Groups creados
+3. Elimina los snapshots si los creaste
 
 ---
 

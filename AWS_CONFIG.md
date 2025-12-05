@@ -1,13 +1,17 @@
 # Configuraciones de Ejemplo para AWS
 
-## 1. Security Group - RDS (inventario-sg)
+## 1. Security Group - Base de Datos (database-sg)
 
 ### Inbound Rules
 | Type | Protocol | Port | Source | Description |
 |------|----------|------|--------|-------------|
+| SSH | TCP | 22 | Tu-IP/32 | SSH access |
 | PostgreSQL | TCP | 5432 | 0.0.0.0/0 | Allow PostgreSQL from anywhere |
 
-**Nota**: En producción, limitar a las IPs específicas de las instancias EC2.
+**Nota**: En producción, limitar PostgreSQL solo a las IPs de los backends.
+
+### Outbound Rules
+Permitir todas las salidas (default)
 
 ---
 
@@ -51,32 +55,44 @@ Permitir todas las salidas (default)
 
 ---
 
-## 5. Configuración RDS PostgreSQL
+## 5. Configuración EC2 - Base de Datos PostgreSQL
 
 ```
-DB Instance Identifier: inventario-db
-Engine: PostgreSQL 15.x
-Template: Free tier (o Production según necesidad)
+Name: database-postgresql
+AMI: Ubuntu Server 22.04 LTS (HVM), SSD Volume Type
+Instance type: t2.micro (1 vCPU, 1 GB RAM)
 
-Instance Configuration:
-- DB instance class: db.t3.micro
-- Storage: 20 GB (gp2)
-- Storage autoscaling: Enabled (max 100 GB)
+Key pair: Crear o usar existente
+Network settings:
+- VPC: Default
+- Subnet: Default
+- Auto-assign public IP: Enable
+- Security group: database-sg
 
-Connectivity:
-- VPC: Default VPC
-- Subnet group: default
-- Public access: Yes
-- VPC security group: inventario-sg
-- Availability Zone: No preference
+Storage: 8 GB gp2 (default)
 
-Database Authentication:
-- Password authentication
+User data (opcional para auto-instalación):
+```
 
-Additional Configuration:
-- Initial database name: inventario
-- Backup retention: 7 days
-- Encryption: Enabled
+```bash
+#!/bin/bash
+apt update
+apt upgrade -y
+apt install postgresql postgresql-contrib -y
+
+# Configurar PostgreSQL para aceptar conexiones remotas
+sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/14/main/postgresql.conf
+echo "host    all             all             0.0.0.0/0               md5" >> /etc/postgresql/14/main/pg_hba.conf
+
+systemctl restart postgresql
+
+# Crear base de datos y usuario
+sudo -u postgres psql << EOF
+CREATE DATABASE inventario;
+CREATE USER admin WITH PASSWORD 'TuPasswordSeguro123!';
+GRANT ALL PRIVILEGES ON DATABASE inventario TO admin;
+ALTER USER admin WITH SUPERUSER;
+EOF
 ```
 
 ---
@@ -108,6 +124,8 @@ wget https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
 tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> /home/ubuntu/.bashrc
 ```
+
+**Nota**: Primero crea la instancia de base de datos antes de los backends.
 
 ---
 
@@ -168,13 +186,15 @@ systemctl start nginx
 Ubicación: `/home/ubuntu/backend-con-validacion/.env`
 
 ```env
-DB_HOST=inventario-db.xxxxxxxxxxxxx.us-east-1.rds.amazonaws.com
+DB_HOST=XX.XX.XX.XX
 DB_PORT=5432
-DB_USER=postgres
+DB_USER=admin
 DB_PASSWORD=TuPasswordSeguro123!
 DB_NAME=inventario
 PORT=8080
 ```
+
+**Reemplazar `XX.XX.XX.XX` con la IP pública de la instancia de base de datos**
 
 ---
 
@@ -183,13 +203,15 @@ PORT=8080
 Ubicación: `/home/ubuntu/backend-sin-validacion/.env`
 
 ```env
-DB_HOST=inventario-db.xxxxxxxxxxxxx.us-east-1.rds.amazonaws.com
+DB_HOST=XX.XX.XX.XX
 DB_PORT=5432
-DB_USER=postgres
+DB_USER=admin
 DB_PASSWORD=TuPasswordSeguro123!
 DB_NAME=inventario
 PORT=8080
 ```
+
+**Reemplazar `XX.XX.XX.XX` con la IP pública de la instancia de base de datos**
 
 ---
 
@@ -325,9 +347,7 @@ sudo journalctl -u backend-validacion -n 100
 
 ```bash
 # Conectar a la BD desde cualquier máquina
-psql -h inventario-db.xxxxx.us-east-1.rds.amazonaws.com \
-     -U postgres \
-     -d inventario
+psql -h <IP_DATABASE> -U admin -d inventario
 
 # Dentro de psql:
 \dt                    # Listar tablas
@@ -350,23 +370,27 @@ SELECT * FROM logs_acceso ORDER BY timestamp DESC LIMIT 10;
 
 | Recurso | Tipo | Costo Aproximado/mes |
 |---------|------|---------------------|
-| RDS PostgreSQL | db.t3.micro | $15-20 |
+| EC2 Database | t2.micro | $8-10 |
 | EC2 Backend 1 | t2.micro | $8-10 |
 | EC2 Backend 2 | t2.micro | $8-10 |
 | EC2 Frontend | t2.micro | $8-10 |
 | Data Transfer | ~1GB/mes | $1-2 |
-| **TOTAL** | | **~$40-52/mes** |
+| **TOTAL** | | **~$33-42/mes** |
 
-**Nota**: Con Free Tier de AWS (primeros 12 meses), muchos de estos costos pueden ser gratuitos.
+**Nota**: Con Free Tier de AWS (primeros 12 meses), las 4 instancias t2.micro pueden ser **GRATUITAS** (750 horas/mes cada una).
 
 ---
 
 ## 18. Checklist de Verificación
 
 ### ✅ Base de Datos
-- [ ] RDS creado y en estado "Available"
+- [ ] EC2 creado y corriendo
+- [ ] PostgreSQL instalado
+- [ ] Configurado para aceptar conexiones remotas
 - [ ] Security group configurado (puerto 5432)
-- [ ] Endpoint guardado
+- [ ] IP pública guardada
+- [ ] Base de datos `inventario` creada
+- [ ] Usuario `admin` creado con permisos
 - [ ] Script 01_create_tables.sql ejecutado
 - [ ] Script 02_seed_data.sql ejecutado
 - [ ] Datos visibles con `SELECT * FROM productos;`
@@ -417,10 +441,12 @@ SELECT * FROM logs_acceso ORDER BY timestamp DESC LIMIT 10;
 
 ## 19. Troubleshooting Común
 
-### Error: "connection refused" desde backend a RDS
+### Error: "connection refused" desde backend a la base de datos
 **Solución**: 
-- Verificar Security Group de RDS permite conexiones desde las IPs de EC2
-- Verificar endpoint en archivo .env
+- Verificar Security Group de database-sg permite conexiones en puerto 5432
+- Verificar que PostgreSQL esté configurado para escuchar en todas las interfaces (`listen_addresses = '*'`)
+- Verificar IP correcta en archivo .env
+- Probar conexión: `psql -h <IP_DATABASE> -U admin -d inventario`
 
 ### Error: "CORS policy" en el frontend
 **Solución**: 

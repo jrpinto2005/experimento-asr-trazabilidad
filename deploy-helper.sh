@@ -1,6 +1,15 @@
 #!/bin/bash
 
-# Script de ayuda para desplegar el proyecto en AWS
+# Script de a# Recopilar información
+echo -e "${BLUE}📝 Por favor proporciona la siguiente información:${NC}"
+echo ""
+
+ask "1️⃣  IP pública de la Base de Datos (EC2):" IP_DATABASE
+ask "2️⃣  Password de PostgreSQL (admin user):" DB_PASSWORD
+ask "3️⃣  IP pública del Backend CON Validación:" IP_BACKEND1
+ask "4️⃣  IP pública del Backend SIN Validación:" IP_BACKEND2
+ask "5️⃣  IP pública del Frontend:" IP_FRONTEND
+ask "6️⃣  Ruta al archivo .pem (ej: ~/Downloads/mi-key.pem):" KEY_PATHdesplegar el proyecto en AWS
 # Este script genera comandos personalizados basados en tus IPs y configuraciones
 
 echo "════════════════════════════════════════════════════════════"
@@ -47,9 +56,9 @@ mkdir -p "$OUTPUT_DIR"
 # 1. Generar archivo .env para Backend 1
 # ═══════════════════════════════════════════════════════════════
 cat > "$OUTPUT_DIR/backend1-env.txt" << EOF
-DB_HOST=$RDS_ENDPOINT
+DB_HOST=$IP_DATABASE
 DB_PORT=5432
-DB_USER=postgres
+DB_USER=admin
 DB_PASSWORD=$DB_PASSWORD
 DB_NAME=inventario
 PORT=8080
@@ -61,9 +70,9 @@ echo -e "${GREEN}✓${NC} Archivo .env para Backend 1 creado: ${BLUE}$OUTPUT_DIR
 # 2. Generar archivo .env para Backend 2
 # ═══════════════════════════════════════════════════════════════
 cat > "$OUTPUT_DIR/backend2-env.txt" << EOF
-DB_HOST=$RDS_ENDPOINT
+DB_HOST=$IP_DATABASE
 DB_PORT=5432
-DB_USER=postgres
+DB_USER=admin
 DB_PASSWORD=$DB_PASSWORD
 DB_NAME=inventario
 PORT=8080
@@ -88,6 +97,9 @@ cat > "$OUTPUT_DIR/ssh-commands.sh" << EOF
 #!/bin/bash
 # Comandos SSH para conectar a los servidores
 
+# Base de Datos
+alias ssh-database="ssh -i $KEY_PATH ubuntu@$IP_DATABASE"
+
 # Backend 1 (CON Validación)
 alias ssh-backend1="ssh -i $KEY_PATH ubuntu@$IP_BACKEND1"
 
@@ -98,6 +110,7 @@ alias ssh-backend2="ssh -i $KEY_PATH ubuntu@$IP_BACKEND2"
 alias ssh-frontend="ssh -i $KEY_PATH ubuntu@$IP_FRONTEND"
 
 echo "Aliases creados:"
+echo "  ssh-database  -> Conectar a Base de Datos"
 echo "  ssh-backend1  -> Conectar a Backend CON validación"
 echo "  ssh-backend2  -> Conectar a Backend SIN validación"
 echo "  ssh-frontend  -> Conectar a Frontend"
@@ -147,17 +160,21 @@ cat > "$OUTPUT_DIR/init-database.sh" << EOF
 #!/bin/bash
 # Inicializar la base de datos PostgreSQL
 
-echo "Conectando a la base de datos..."
-echo "Endpoint: $RDS_ENDPOINT"
-echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "Copiando scripts SQL al servidor de base de datos..."
+echo "════════════════════════════════════════════════════════════"
+scp -i $KEY_PATH database/*.sql ubuntu@$IP_DATABASE:~/
 
-psql -h $RDS_ENDPOINT -U postgres -d inventario << SQL
-\\i database/01_create_tables.sql
-\\i database/02_seed_data.sql
-\\dt
-SELECT COUNT(*) as total_operarios FROM operarios;
-SELECT COUNT(*) as total_productos FROM productos;
-SQL
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "Ejecutando scripts SQL..."
+echo "════════════════════════════════════════════════════════════"
+ssh -i $KEY_PATH ubuntu@$IP_DATABASE << 'ENDSSH'
+psql -h localhost -U admin -d inventario -f ~/01_create_tables.sql
+psql -h localhost -U admin -d inventario -f ~/02_seed_data.sql
+psql -h localhost -U admin -d inventario -c "SELECT COUNT(*) as total_operarios FROM operarios;"
+psql -h localhost -U admin -d inventario -c "SELECT COUNT(*) as total_productos FROM productos;"
+ENDSSH
 
 echo ""
 echo "✅ Base de datos inicializada!"
@@ -232,10 +249,14 @@ Backend SIN Validación:
   🔍 Health: http://$IP_BACKEND2:8080/health
   📦 Productos: http://$IP_BACKEND2:8080/productos
 
-Base de Datos:
-  🗄️  Host: $RDS_ENDPOINT
+Base de Datos (PostgreSQL en EC2):
+  🗄️  Host: $IP_DATABASE
   🔌 Port: 5432
   📊 DB: inventario
+  👤 User: admin
+
+Conexión a la BD:
+  psql -h $IP_DATABASE -U admin -d inventario
 
 ════════════════════════════════════════════════════════════
 EOF
