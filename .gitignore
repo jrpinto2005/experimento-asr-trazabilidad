@@ -1,0 +1,44 @@
+# Archivos de Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Dependencias de Go
+vendor/
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backend binaries
+backend-con-validacion/server
+backend-sin-validacion/server
+
+# Node modules (Frontend)
+frontend/node_modules/
+frontend/build/
+frontend/.env.production
+
+# AWS
+*.pem
+*.ppk
